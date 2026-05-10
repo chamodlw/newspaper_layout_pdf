@@ -1,0 +1,33 @@
+# Newspaper PDF Pipeline – Python dependencies
+# ================================================
+# Create and activate venv first:
+#   python -m venv .venv
+#   .venv\Scripts\activate        # Windows
+#   source .venv/bin/activate     # macOS / Linux
+#
+# Then install:
+#   pip install -r requirements.txt
+
+# ── PDF rendering ─────────────────────────────────────────────────────────────
+pymupdf>=1.23.0
+
+# ── Image processing ──────────────────────────────────────────────────────────
+opencv-python>=4.8.0
+numpy>=1.24.0
+Pillow>=10.0.0
+
+# ── Deep Learning ─────────────────────────────────────────────────────────────
+# IMPORTANT: PyTorch CPU on Windows must be installed explicitly using its index:
+# pip install torch==2.5.1+cpu torchvision==0.20.1+cpu --index-url https://download.pytorch.org/whl/cpu
+# We lock the versions to ensure compatibility and prevent DLL load errors.
+torch==2.5.1
+torchvision==0.20.1
+
+# ── Surya OCR (Sinhala + English deep-learning OCR) ──────────────────────────
+# Version locked due to transformers / torch update conflicts.
+surya-ocr==0.10.0
+transformers==4.41.2
+
+# ── AI Post-Correction ────────────────────────────────────────────────────────
+google-generativeai
+python-dotenv

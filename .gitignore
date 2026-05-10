@@ -1,0 +1,34 @@
+# Environment
+.venv/
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# IDE / Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Input data (PDFs)
+# Note: Comment out if you want to track source PDFs in git
+newspaper_pdfs/*.pdf
+
+# Generated images & layouts
+newspaper_pages/
+separated_articles/
+separated_layout/
+
+# Generated OCR text outputs
+extract_news/
+
+# Surya OCR temporary / cache files
+.surya/
+~/.cache/huggingface/
