@@ -50,11 +50,13 @@ Requirements
 import os
 import sys
 
+# pyrefly: ignore [missing-import]
 import cv2
 import numpy as np
 
 # ── PDF rendering ─────────────────────────────────────────────────────────────
 try:
+    # pyrefly: ignore [missing-import]
     import fitz
 except ImportError:
     print("\nError: PyMuPDF is not installed.  pip install pymupdf\n")
@@ -133,10 +135,53 @@ def separate_page(image_path: str, rules: dict,
     overlap_thresh  = rules["overlap_threshold"]
     save_margin     = rules["save_margin"]
 
+    # Gutter-reinforcement parameters (optional – default off)
+    reinforce_gutters      = rules.get("reinforce_gutters", False)
+    gutter_dark_fraction   = rules.get("gutter_dark_fraction", 0.10)
+    min_vert_gutter_px     = rules.get("min_vertical_gutter_px", 8)
+    min_horiz_gutter_px    = rules.get("min_horizontal_gutter_px", 8)
+
     # ── Preprocessing ─────────────────────────────────────────────────────────
     gray         = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
     _, white_mask = cv2.threshold(gray, white_threshold, 255, cv2.THRESH_BINARY)
     content_mask  = cv2.bitwise_not(white_mask)
+
+    # ── Gutter reinforcement ───────────────────────────────────────────────────
+    # Problem: Lankadeepa (and similar papers) use thin black rule lines between
+    # side-by-side articles.  After thresholding those hairlines leave a few
+    # dark pixels inside what should be a clean white gutter, giving the
+    # subsequent dilation a foothold to bridge the gap and merge two articles
+    # into one detected blob.
+    #
+    # Fix: before dilating, detect nearly-empty column/row bands in content_mask
+    # (where <gutter_dark_fraction of pixels are content) and zero them out so
+    # no dilation can cross the boundary.
+    if reinforce_gutters:
+        # ── Vertical gutters (separate side-by-side articles) ──────────────
+        col_dark_frac = content_mask.sum(axis=0) / (255.0 * img_height)  # (w,)
+        gutter_cols   = (col_dark_frac < gutter_dark_fraction).astype(np.uint8)
+
+        # Find contiguous runs of gutter columns
+        padded = np.concatenate(([0], gutter_cols, [0]))
+        diff   = np.diff(padded.astype(np.int8))
+        starts = np.where(diff == 1)[0]
+        ends   = np.where(diff == -1)[0]   # exclusive
+        for xs, xe in zip(starts, ends):
+            if xe - xs >= min_vert_gutter_px:
+                content_mask[:, xs:xe] = 0  # reinforce: blank the gutter
+
+        # ── Horizontal gutters (separate stacked articles) ─────────────────
+        row_dark_frac = content_mask.sum(axis=1) / (255.0 * img_width)   # (h,)
+        gutter_rows   = (row_dark_frac < gutter_dark_fraction).astype(np.uint8)
+
+        padded = np.concatenate(([0], gutter_rows, [0]))
+        diff   = np.diff(padded.astype(np.int8))
+        starts = np.where(diff == 1)[0]
+        ends   = np.where(diff == -1)[0]
+        for ys, ye in zip(starts, ends):
+            if ye - ys >= min_horiz_gutter_px:
+                content_mask[ys:ye, :] = 0  # reinforce: blank the gutter
+
     kernel        = np.ones(kernel_size, np.uint8)
     content_mask  = cv2.dilate(content_mask, kernel, iterations=morph_iter)
 

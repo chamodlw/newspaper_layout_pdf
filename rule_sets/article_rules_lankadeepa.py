@@ -47,6 +47,29 @@ v3 (layout-image fix - current):
        Bottom (bank ad + footer):           y = 0.790 - 1.000
   12. PAGE 1 Zone A kept at y=0.975 (S-lon Polycon ad at very bottom)
   13. PAGE 2 full-page exclusion retained (0.0, 0.0, 1.0, 1.0)
+
+v4 (gutter-reinforcement fix):
+  ROOT CAUSE: Lankadeepa uses a thin black hairline rule between side-by-side
+  articles on page 1 (e.g. two coloured headline boxes side by side).  After
+  thresholding (>235), the hairline leaves ~6% dark pixels inside the white
+  gutter band.  The morphological dilation (3x18 kernel, 3 iters) uses those
+  residual pixels as a foothold and bridges across the gap, merging two
+  separate articles into one blob.  Result: article_13 (2024-11-12 page_01)
+  captured both headline boxes as a single crop.
+
+  Fix: added a "gutter reinforcement" step in pdf_separator.py that runs
+  BEFORE dilation:
+    - Compute per-column dark-pixel fraction from content_mask
+    - Any contiguous column band where fraction < gutter_dark_fraction (0.12)
+      AND width >= min_vertical_gutter_px (10) is zeroed out completely
+    - Same logic applied to rows for horizontal gutters
+  This prevents dilation from crossing legitimate article boundaries.
+
+  Parameters added to _BASE (inherited by all page rules):
+    reinforce_gutters      = True
+    gutter_dark_fraction   = 0.12
+    min_vertical_gutter_px = 10
+    min_horizontal_gutter_px = 8
 """
 
 # ---------------------------------------------------------------------------
@@ -98,6 +121,17 @@ _BASE = {
     "ocr_lang":       "si",
     "ocr_extra_lang": "en",
     "ocr_min_chars":  10,
+
+    # Gutter reinforcement
+    # Side-by-side articles are divided by a thin white gap that may contain a
+    # hairline black rule (1-3 px).  After thresholding the rule leaves a few
+    # dark pixels in the gap which the dilation can bridge, merging two articles
+    # into one blob.  Setting reinforce_gutters=True zeros out any nearly-empty
+    # column or row band BEFORE dilation so morphology cannot cross it.
+    "reinforce_gutters":      True,
+    "gutter_dark_fraction":   0.12,  # band must be <12% dark pixels to qualify
+    "min_vertical_gutter_px": 10,    # band must be >=10 px wide
+    "min_horizontal_gutter_px": 8,   # band must be >=8 px tall
 
     # Per-page exclusion zones (overridden per-page below)
     "excluded_zones_by_page": {},
