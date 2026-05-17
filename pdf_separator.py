@@ -79,8 +79,62 @@ SUPPORTED_EXT   = {".pdf"}
 
 
 # ────────────────────────────────────────────────────────────────────────────
-# Overlap helper  (identical to newspaper_separator.py)
+# Helpers
 # ────────────────────────────────────────────────────────────────────────────
+
+def _apply_exclusion_zones(mask: np.ndarray, zones: list,
+                            img_height: int, img_width: int) -> np.ndarray:
+    """
+    Zero out rectangular regions specified as fractional (x, y, w, h) tuples.
+    Applied to the content mask so no contours are detected in excluded areas.
+    """
+    for (x_f, y_f, w_f, h_f) in zones:
+        x1 = int(x_f * img_width)
+        y1 = int(y_f * img_height)
+        x2 = min(img_width,  x1 + int(w_f * img_width))
+        y2 = min(img_height, y1 + int(h_f * img_height))
+        mask[y1:y2, x1:x2] = 0
+    return mask
+
+
+def _reinforce_gutters(mask: np.ndarray,
+                       dark_frac: float,
+                       min_vert_px: int,
+                       min_horiz_px: int) -> np.ndarray:
+    """
+    Zero out thin white vertical and horizontal strips (column/row gutters) so
+    that subsequent dilation cannot bridge across them and merge adjacent articles.
+
+    Only strips where the fraction of dark pixels is below ``dark_frac`` AND
+    the run of such columns/rows is at least ``min_vert_px`` / ``min_horiz_px``
+    pixels wide are cleared.
+    """
+    h, w = mask.shape
+
+    # --- Vertical gutters (between columns) ---
+    col_dark = np.count_nonzero(mask, axis=0) / h   # dark-pixel fraction per column
+    gutter_col = col_dark < dark_frac
+
+    padded = np.concatenate([[False], gutter_col, [False]])
+    starts = np.where(~padded[:-1] & padded[1:])[0]
+    ends   = np.where( padded[:-1] & ~padded[1:])[0]
+    for s, e in zip(starts, ends):
+        if (e - s) >= min_vert_px:
+            mask[:, s:e] = 0
+
+    # --- Horizontal gutters (between rows) ---
+    row_dark = np.count_nonzero(mask, axis=1) / w   # dark-pixel fraction per row
+    gutter_row = row_dark < dark_frac
+
+    padded = np.concatenate([[False], gutter_row, [False]])
+    starts = np.where(~padded[:-1] & padded[1:])[0]
+    ends   = np.where( padded[:-1] & ~padded[1:])[0]
+    for s, e in zip(starts, ends):
+        if (e - s) >= min_horiz_px:
+            mask[s:e, :] = 0
+
+    return mask
+
 
 def boxes_overlap(box1, box2, threshold: float) -> bool:
     x1, y1, w1, h1 = box1
@@ -100,9 +154,19 @@ def boxes_overlap(box1, box2, threshold: float) -> bool:
 
 def separate_page(image_path: str, rules: dict,
                   output_folder: str, layout_folder: str,
-                  layout_name: str) -> tuple[int, list, list]:
+                  layout_name: str,
+                  page_number: int = 1) -> tuple[int, list, list]:
     """
     Detect and crop articles from a single rendered page image.
+
+    Parameters
+    ----------
+    image_path   : path to the rendered page PNG.
+    rules        : rule dict for this specific page (may be page-specific).
+    output_folder: where to save article crops.
+    layout_folder: where to save the layout visualisation.
+    layout_name  : base name for the layout visualisation file.
+    page_number  : 1-based page index — used to look up exclusion zones.
 
     Returns (num_articles, final_boxes, saved_crops)
     """
@@ -134,11 +198,32 @@ def separate_page(image_path: str, rules: dict,
     save_margin     = rules["save_margin"]
 
     # ── Preprocessing ─────────────────────────────────────────────────────────
-    gray         = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    gray          = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
     _, white_mask = cv2.threshold(gray, white_threshold, 255, cv2.THRESH_BINARY)
     content_mask  = cv2.bitwise_not(white_mask)
-    kernel        = np.ones(kernel_size, np.uint8)
-    content_mask  = cv2.dilate(content_mask, kernel, iterations=morph_iter)
+
+    # ── Exclusion zones (applied BEFORE gutter reinforcement and dilation) ────
+    # Zones are zero'd out so no content from headers/footers/ads feeds into
+    # morphology or contour detection.
+    zones = rules.get("excluded_zones_by_page", {}).get(page_number, [])
+    if zones:
+        content_mask = _apply_exclusion_zones(
+            content_mask, zones, img_height, img_width)
+
+    # ── Gutter reinforcement (applied BEFORE dilation) ────────────────────────
+    # Zero out thin white column/row strips so dilation cannot bridge across
+    # them and merge articles from adjacent columns.
+    if rules.get("reinforce_gutters", False):
+        content_mask = _reinforce_gutters(
+            content_mask,
+            dark_frac    = rules.get("gutter_dark_fraction",      0.05),
+            min_vert_px  = rules.get("min_vertical_gutter_px",    10),
+            min_horiz_px = rules.get("min_horizontal_gutter_px",  8),
+        )
+
+    # ── Morphological dilation (bridges gaps within a single article) ─────────
+    kernel       = np.ones(kernel_size, np.uint8)
+    content_mask = cv2.dilate(content_mask, kernel, iterations=morph_iter)
 
     # ── Contour detection ─────────────────────────────────────────────────────
     contours, _ = cv2.findContours(content_mask,
@@ -249,27 +334,37 @@ def process_pdf(pdf_path: str, rules: dict, dpi: int = DEFAULT_DPI) -> int:
 
     total_articles = 0
 
+    # Some newspapers (e.g. Lankadeepa) supply a per-page rule factory so that
+    # page 1 (front), page 2 (classifieds), and inner pages each get their own
+    # thresholds, kernel sizes, and exclusion zones.
+    page_rules_factory = rules.get("page_rules_factory")
+
     for page_idx in range(num_pages):
-        page_label = f"page_{str(page_idx + 1).zfill(pad)}"
+        page_number       = page_idx + 1
+        page_label        = f"page_{str(page_number).zfill(pad)}"
         page_articles_dir = os.path.join(articles_dir, page_label)
-        print(f"  [{page_idx + 1:>{pad}}/{num_pages}]  Rendering {page_label} ... ", end="", flush=True)
+        print(f"  [{page_number:>{pad}}/{num_pages}]  Rendering {page_label} ... ", end="", flush=True)
 
         # Render page to PNG
         page_img_path = render_page(doc, page_idx, pages_dir, dpi)
         img = cv2.imread(page_img_path)
         print(f"{img.shape[1]}×{img.shape[0]}px  |  Separating ... ", end="", flush=True)
 
+        # Resolve per-page rules (falls back to the shared dict if no factory)
+        page_rules = page_rules_factory(page_number) if page_rules_factory else rules
+
         # Separate articles from this page
         try:
             n, _, _ = separate_page(
                 image_path    = page_img_path,
-                rules         = rules,
+                rules         = page_rules,
                 output_folder = page_articles_dir,
                 layout_folder = layout_dir,
                 layout_name   = page_label,
+                page_number   = page_number,
             )
             total_articles += n
-            print(f"{n} article(s) found")
+            print(f"{n} article(s) found  [{page_rules['newspaper_name']}]")
         except Exception as exc:
             print(f"ERROR – {exc}")
 

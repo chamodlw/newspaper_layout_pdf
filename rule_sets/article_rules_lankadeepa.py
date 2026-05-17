@@ -74,8 +74,8 @@ _BASE = {
 
     # Dimension filters
     # Raised to reject narrow gutters, single text lines, and caption slivers.
-    "min_width":       210,      
-    "min_height":      210,       
+    "min_width":       210,
+    "min_height":      210,
     "max_width_ratio":  0.95,
     "max_height_ratio": 0.95,
 
@@ -93,6 +93,18 @@ _BASE = {
 
     # Crop margin
     "save_margin": 5,
+
+    # Gutter reinforcement — zero out thin white vertical/horizontal strips
+    # in the pre-dilation content mask so dilation cannot bridge across column
+    # gutters and merge adjacent articles.
+    #   gutter_dark_fraction : columns/rows with fewer than this fraction of
+    #                          dark pixels are treated as a gutter strip.
+    #   min_vertical_gutter_px   : minimum width (px) of a vertical gutter to reinforce.
+    #   min_horizontal_gutter_px : minimum height (px) of a horizontal gutter to reinforce.
+    "reinforce_gutters":         True,
+    "gutter_dark_fraction":      0.04,
+    "min_vertical_gutter_px":    8,
+    "min_horizontal_gutter_px":  10,
 
     # OCR settings
     "ocr_lang":       "si",
@@ -225,8 +237,12 @@ _INNER_PAGE_EXCLUSIONS = [
 # ---------------------------------------------------------------------------
 
 # RULES is kept for backward-compatibility with callers that import a single
-# rule dict.  It uses inner-page defaults (no exclusion zones).
-RULES = PAGE_3_PLUS_RULES
+# rule dict.  It carries ``page_rules_factory`` so that process_pdf() can
+# dispatch the correct per-page parameters automatically.
+RULES = {
+    **PAGE_3_PLUS_RULES,
+    "page_rules_factory": None,   # filled in below after get_rules_for_page is defined
+}
 
 
 def get_rules_for_page(page_number: int) -> dict:
@@ -259,3 +275,7 @@ def get_rules_for_page(page_number: int) -> dict:
         page_number: list(_INNER_PAGE_EXCLUSIONS),
     }
     return rules
+
+
+# Wire the factory into RULES now that the function is defined.
+RULES["page_rules_factory"] = get_rules_for_page
