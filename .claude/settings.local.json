@@ -1,0 +1,12 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(find \"D:\\\\personal\\\\fyp\\\\NLP\\\\1 sepetation_extraction\\\\newspaper_layout_pdf\" -type f -name \"*.py\" | grep -v \".venv\" | grep -v \"__pycache__\")",
+      "Bash(python -c ' *)",
+      "Bash(python -c \"import cv2; print\\(cv2.__version__\\)\")",
+      "Bash(python3 -c \"import cv2; print\\(cv2.__version__\\)\")",
+      "Bash(where python *)",
+      "Bash(C:/Users/ZIN-CE-LP-548/AppData/Local/Programs/Python/Python314/python.exe -c ' *)"
+    ]
+  }
+}
